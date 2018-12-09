@@ -1,6 +1,4 @@
-CSE 549.01 Computational Biology - Fall 2018
-
-( Project Source Code )
+CSE 549.01 Computational Biology - Fall 2018 ( Project Source Code )
 
 -----------------------------------------------
 
