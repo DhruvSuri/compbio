@@ -964,10 +964,10 @@ predictelate <-
     out
   }
 
-runnit <-
+run_inferelator <-
   function (ks, data, col.map, predictors, clusterStack, tau = 10, 
-            plot = T, coeffs = NULL, group_count = Inf, n.boot = 1, boot.opt = c("resample.lars", 
-                                                                               "resample.rows", "resample", "lars")[1], ...) 
+            plot = T, coeffs = NULL, group_count = Inf, n.boot = 1, 
+            boot.opt = c("resample.lars", "resample.rows", "resample", "lars")[1], ...) 
   {
     in.args <- c(mget(names(formals()), env = as.environment(-1)), 
                  sapply(as.list(substitute({
@@ -975,46 +975,21 @@ runnit <-
                  })[-1]), deparse))
     data <- mean.variance.normalize(data, filter = 0.04)
     predictors <- predictors[predictors %in% rownames(data)]
-    if (!exists("predictor.mats") || ((is.na(group_count) || group_count == 
-                                       0 || group_count >= length(predictors)) && length(predictor.mats$group_count) != 
-                                      length(predictors)) || (!is.na(group_count) && group_count != 
-                                                              0 && group_count < length(predictors) && length(predictor.mats$group_count) != 
-                                                              group_count)) {
-      predictor.mats <<- get.predictor.matrices(predictors, 
-                                                data, preclust.k = group_count, ...)
-    }
-    n.boot.lars <- 1
-    boot.opt.lars <- "resample"
-    if (n.boot > 1 && boot.opt %in% c("resample.lars", "lars")) {
-      n.boot.lars <- n.boot
-      n.boot <- 1
-      if (boot.opt == "lars") 
-        boot.opt.lars <- "cv"
-    }
     apply.func <- get.apply.func(plot)
-    if (n.boot > 1) 
-      apply.func <- lapply
+    
     out <- apply.func(ks, function(i) {
       cluster <- clusterStack[[i]]
       k <- cluster$k
       apply.func <- get.apply.func()
-      if (n.boot == 1) 
-        apply.func <- lapply
+      apply.func <- lapply
       out.k <- apply.func(1:n.boot, function(boot) {
-        cat("***      BICLUSTER:", k, boot, "\n")
+        cat("BICLUSTER:", k, boot, "\n")
         clust <- cluster
-        if (boot > 1) {
-          if (boot.opt %in% c("resample", "resample.rows")) 
-            clust$rows <- sample(clust$rows, replace = T)
-          if (boot.opt == "resample") 
-            clust$cols <- sample(colnames(data), length(clust$cols), 
-                                 replace = F)
-        }
         if (length(clust$cols) <= 2) 
           return(NULL)
         coeffs <- inferelate.one.cluster(clust, predictors, 
                                          data, predictor.mats = predictor.mats, tau = tau, 
-                                         col.map = col.map, n.boot = n.boot.lars, boot.opt = boot.opt.lars, 
+                                         col.map = col.map, n.boot = 1, boot.opt = "resample", 
                                          quiet = n.boot > 1, ...)
         clust.rows <- clust$rows[clust$rows %in% rownames(data)]
         clust.conds <- sort(coeffs$cluster.conds)
@@ -1034,19 +1009,12 @@ runnit <-
           pred.ss <- t(observed * 0)
         if (is.null(pred.term)) 
           pred.term <- t(observed * 0)
-        if ("weighted" %in% names(list(...)) && list(...)$weighted == 
-            TRUE) {
-          vars <- apply(data[clust.rows, , drop = F], 2, 
-                        var, na.rm = T)
-          vars <- vars/(abs(observed) + 0.05)
-          vars[is.na(vars) | vars == 0] <- 1
-          weights <- 1/vars
-          weights <- weights/sum(weights) * length(weights)
-        }
-        else {
-          weights <- rep(1, ncol(data))
-          names(weights) <- colnames(data)
-        }
+        vars <- apply(data[clust.rows, , drop = F], 2, 
+                      var, na.rm = T)
+        vars <- vars/(abs(observed) + 0.05)
+        vars[is.na(vars) | vars == 0] <- 1
+        weights <- 1/vars
+        weights <- weights/sum(weights) * length(weights)
         rmsd.ss <- sqrt(weighted.mean((pred.ss[nrow(pred.ss), 
                                                ] - observed)[clust.conds]^2, weights[clust.conds], 
                                       na.rm = T))
@@ -1063,8 +1031,7 @@ runnit <-
         coeffs$plot.info$clust.conds.plot <- c(clust.conds, 
                                                sort(colnames(data)[!colnames(data) %in% clust.conds]))
         coeffs$plot.info$n.conds <- length(clust.conds)
-        if (n.boot <= 1) 
-          cat(k, tau, rmsd.ss, rmsd.term, rmsd.term.out, "\n")
+        cat(k, tau, rmsd.ss, rmsd.term, rmsd.term.out, "\n")
         coeffs$pred.ss <- pred.ss
         coeffs$pred.term <- pred.term
         coeffs$rmsd <- c(ss = rmsd.ss, term = rmsd.term, term.out = rmsd.term.out)
@@ -1077,32 +1044,8 @@ runnit <-
         coeffs
       })
       names(out.k) <- paste(k, 1:n.boot, sep = ".")
-      if (n.boot > 1) {
-        cc.tmp <- out.k
-        nb <- max(n.boot, n.boot.lars)
-        cc.tmp <- cc.tmp[sapply(cc.tmp, length) > 0]
-        cc <- lapply(cc.tmp, "[[", "coeffs")
-        tmp <- cc
-        names(tmp) <- NULL
-        tmp <- unlist(tmp)
-        tmp2 <- sort(table(names(tmp)), decreasing = T)
-        coef.quantiles <- t(sapply(names(tmp2), function(i) {
-          tmp3 <- tmp[names(tmp) == i]
-          tmp3 <- c(tmp3, rep(0, nb - length(tmp3)))
-          c(n = sum(names(tmp3) == i)/nb, quantile(abs(tmp3), 
-                                                   prob = c(0.01, 0.05, 0.1, 0.5, 0.9, 0.95)) * 
-              sign(mean(tmp3[tmp3 != 0], na.rm = T)))
-        }))
-        coef.quantiles <- coef.quantiles[!apply(coef.quantiles, 
-                                                1, function(i) all(i[-1] == 0)), ]
-        out.k[[1]]$coef.quantiles <- coef.quantiles
-      }
-      else if (n.boot.lars > 1) {
-        print(out.k[[1]]$coef.quantiles, digits = 3)
-      }
-      if (plot) {
-        try(plot_objects(out.k, ...))
-      }
+      try(plot_objects(out.k, ...))
+      
       attr(out.k, "class") <- "coeff.obj"
       out.k
     })
@@ -1127,6 +1070,6 @@ start_inferalator <- function (e, ...)
   if (!is.null(predictors)) 
     predictors <- predictors[predictors %in% rownames(data)]
   
-  out <- runnit(ks, data, colMap, predictors, clusterStack = e$clusterStack, gene.prefix = e$genome.info$gene.prefix, ...)
+  out <- run_inferelator(ks, data, colMap, predictors, clusterStack = e$clusterStack, gene.prefix = e$genome.info$gene.prefix, ...)
   invisible(out)
 }
