@@ -18,5 +18,7 @@ Please follow the given steps in RStudio to run the project
 
 8. source('<path/to/project_inferelator.R>')
 
-9. coefficients <- start_inferalator( e, min_choice="min+4se", group_count=999, alpha=0.8, n.boot=1, tau=10,
+9. DEBUG = TRUE
+
+10. coefficients <- start_inferalator( e, min_choice="min+4se", group_count=999, alpha=0.8, n.boot=1, tau=10,
                 r_threshold=Inf, r.filter=Inf, weighted=T, aic.filter=Inf, plot=T )
