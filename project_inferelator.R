@@ -1,17 +1,22 @@
-DATE <-
-  "Tue Feb 25 14:26:24 2014"
-VERSION <-
-  "0.1.4"
-.onLoad <-
-  function( libname, pkgname ) { ##.onAttach
-    cat( "Loading ", pkgname, " version ", VERSION, " (", DATE, ")\n", sep="" )
-    cat( "Copyright (C) David J Reiss, Institute for Systems Biology; dreiss@systemsbiology.org.\n" )
-    cat( "http://github.com/dreiss-isb/cMonkeyNwInf\n" )
-    cat( "\nNOTE that this package is still sloppy in that it relies upon some global variables:\n" )
-    cat( "'predictor.mats', 'envMap', 'colMap', and optionally 'predictors'.\n" )
+start_inferalator <- function (e, ...)
+{
+  ratios <- e$get.cluster.matrix()
+  ks <- 1:e$k.clust
+  data <- ratios
+  
+  if (!is.null(envMap)) {
+    data <- rbind(ratios, t(as.matrix(envMap)))
+    predictors <- c(predictors, colnames(envMap))
   }
-combine.symbol <-
-  "~~"
+  
+  if (!is.null(predictors)) 
+    predictors <- predictors[predictors %in% rownames(data)]
+  
+  out <- run_inferelator(ks, data, colMap, predictors, clusterStack = e$clusterStack, gene.prefix = e$genome.info$gene.prefix, ...)
+  invisible(out)
+}
+
+
 cv.glmnet <-
   function (x, y, lambda, K = 10, cv.reps = 10, trace = FALSE, 
             plot.it = TRUE, se = TRUE, weights = NA, ...) 
@@ -23,8 +28,6 @@ cv.glmnet <-
       weights <- rep(1, length(y))
     residmat <- do.call(cbind, apply.func(1:length(all.folds), 
                                           function(i) {
-                                            if (trace) 
-                                              cat("CV Fold", i, "\n")
                                             omit <- all.folds[[i]]
                                             fit <- my.glmnet(x[-omit, ], y[-omit], lambda = lambda, 
                                                              weights = weights[-omit], ...)
@@ -70,7 +73,7 @@ fill.in.time.series <-
 
 get.apply.func <-
   function (plot = F) 
-    if (parallel:::isChild() || plot || (exists("DEBUG") && DEBUG)) lapply else mclapply
+    lapply
 
 
 
@@ -101,10 +104,6 @@ get.input.matrix <-
     out.tmp <- profile
     in.tmp <- predictor.mat
     if (!is.null(col.map) && !is.na(tau) && tau > 0) {
-      if (!quiet) 
-        cat("Time series data supplied, converting predictors to difference equation... \n")
-      if (!quiet) 
-        cat("Tau =", tau, "\n")
       conds <- colnames(predictor.mat)
       cm <- col.map[conds, ]
       good.i <- ((cm$isTs == TRUE) & (cm$is1stLast %in% c("m", 
@@ -124,10 +123,6 @@ get.input.matrix <-
       in.tmp <- predictor.mat[, prevs]
       colnames(in.tmp) <- names(out.tmp)
     }
-    else {
-      if (!quiet) 
-        cat("Time series data NOT supplied, using Tau = 0.\n")
-    }
     out.tmp[out.tmp > ratio.cutoff] <- ratio.cutoff
     out.tmp[out.tmp < -ratio.cutoff] <- -ratio.cutoff
     in.tmp[in.tmp > ratio.cutoff] <- ratio.cutoff
@@ -146,8 +141,6 @@ get.predictor.matrices <-
   function (predictors, data, gene.prefix = "DVU", preclust.k = NA, 
             funcs = NULL, quiet = F, ...) 
   {
-    if (!quiet) 
-      cat("Computing predictor matrices...\n")
     predictors <- predictors[predictors %in% rownames(data)]
     predictors.genetic <- grep(paste("^", gene.prefix, sep = ""), 
                                predictors, ignore.case = T, value = T)
@@ -179,8 +172,6 @@ get.predictor.matrices <-
     rm(tmp)
     predictor.mat.ands <- NULL
     if (!is.na(funcs) && length(funcs) > 0) {
-      if (!quiet) 
-        cat("Computing combined predictor matrix...\n")
       predictor.mat.ands <- join_predictors(predictor.mat, 
                                                      funcs = funcs, ...)
     }
@@ -245,10 +236,7 @@ inferelate.one.cluster <-
                             cluster.conds, col.map = col.map, quiet = quiet, 
                             ...)
     }
-    if (!quiet) {
-      cat("BICLUSTER", cluster$k, ": NONZERO COEFFS:\n")
-      print(coeffs$coeffs)
-    }
+
     singleresult <- coeffs$coeffs
     coeffs.boot <- coeffs$coeffs.boot
     coef.quantiles <- coeffs$coef.quantiles
@@ -279,7 +267,7 @@ inferelate.one.cluster <-
 inferelator <-
   function (profile, predictor.mat, conds.use, col.map = NULL, 
             tau = 10, ratio.cutoff = 3, coef.cutoff = 0.02, cv.k = 10, 
-            min_choice = "min+2se", n.boot = 1, boot.opt = c("resample", 
+            min_choice = "min+2se", boot_n = 1, boot.opt = c("resample", 
                                                             "cv"), rescale.coeffs = T, quiet = T, max.coeffs = NA, 
             min.coeffs = NA, ...) 
   {
@@ -292,7 +280,7 @@ inferelator <-
     output <- tmp$outp
     rm(tmp)
     apply.func <- get.apply.func()
-    out.coe <- apply.func(1:n.boot, function(boot) {
+    out.coe <- apply.func(1:boot_n, function(boot) {
       cols <- 1:length(output)
       if (boot > 1 && boot.opt == "resample") 
         cols <- sample(cols, replace = T)
@@ -367,20 +355,18 @@ inferelator <-
     coeffs <- out.coe[[1]]
     coeffs <- coeffs[order(abs(coeffs), decreasing = T)]
     coef.quantiles <- NULL
-    if (n.boot > 1) {
+    if (boot_n > 1) {
       tmp <- unlist(out.coe)
       tmp2 <- table(names(tmp))
       coef.quantiles <- t(sapply(names(tmp2), function(i) {
         tmp3 <- tmp[names(tmp) == i]
-        tmp3 <- c(tmp3, rep(0, n.boot - length(tmp3)))
-        c(n = sum(names(tmp) == i)/n.boot, quantile(abs(tmp3), 
+        tmp3 <- c(tmp3, rep(0, boot_n - length(tmp3)))
+        c(n = sum(names(tmp) == i)/boot_n, quantile(abs(tmp3), 
                                                     prob = c(0.01, 0.05, 0.1, 0.5, 0.9, 0.95)) * 
             sign(mean(tmp3[tmp3 != 0], na.rm = T)))
       }))
       coef.quantiles <- coef.quantiles[!apply(coef.quantiles, 
                                               1, function(i) all(i[-1] == 0)), ]
-      if (!quiet) 
-        print(coef.quantiles, digits = 3)
     }
     return(list(coeffs = coeffs, coeffs.boot = out.coe, coef.quantiles = coef.quantiles, 
                 lars.obj = lars.obj, cv.lars.obj = cv.lars.obj, min_choice = min_choice, 
@@ -389,7 +375,7 @@ inferelator <-
 
 run_inferelator_enet <- function (profile, predictor.mat, conds.use, col.map = NULL, 
                                   tau = 10, ratio.cutoff = 3, coef.cutoff = 0.02, cv.k = 10, 
-                                  min_choice = "min+2se", n.boot = 1, boot.opt = c("resample", 
+                                  min_choice = "min+2se", boot_n = 1, boot.opt = c("resample", 
                                                                                   "cv"), rescale.coeffs = T, quiet = T, alpha = 0.9, weights = NA, 
                                   penalties = NA, max.coeffs = NA, min.coeffs = NA, ...) 
 {
@@ -399,7 +385,7 @@ run_inferelator_enet <- function (profile, predictor.mat, conds.use, col.map = N
 inferelator.enet <-
   function (profile, predictor.mat, conds.use, col.map = NULL, 
             tau = 10, ratio.cutoff = 3, coef.cutoff = 0.02, cv.k = 10, 
-            min_choice = "min+2se", n.boot = 1, boot.opt = c("resample", 
+            min_choice = "min+2se", boot_n = 1, boot.opt = c("resample", 
                                                             "cv"), rescale.coeffs = T, quiet = T, alpha = 0.9, weights = NA, 
             penalties = NA, max.coeffs = NA, min.coeffs = NA, ...) 
   {
@@ -451,7 +437,7 @@ inferelator.enet <-
     apply.func <- get.apply.func()
     if (!quiet) 
       cat("Alpha =", alpha, "\n")
-    out.coe <- apply.func(1:n.boot, function(boot) {
+    out.coe <- apply.func(1:boot_n, function(boot) {
       cols <- 1:length(output)
       if (boot > 1 && boot.opt == "resample") 
         cols <- sample(cols, replace = T)
@@ -545,20 +531,19 @@ inferelator.enet <-
     coeffs <- out.coe[[1]]
     coeffs <- coeffs[order(abs(coeffs), decreasing = T)]
     coef.quantiles <- NULL
-    if (n.boot > 1) {
+    if (boot_n > 1) {
       tmp <- unlist(out.coe)
       tmp2 <- sort(table(names(tmp)), decreasing = T)
       coef.quantiles <- t(sapply(names(tmp2), function(i) {
         tmp3 <- tmp[names(tmp) == i]
-        tmp3 <- c(tmp3, rep(0, n.boot - length(tmp3)))
-        c(n = sum(names(tmp) == i)/n.boot, quantile(abs(tmp3), 
+        tmp3 <- c(tmp3, rep(0, boot_n - length(tmp3)))
+        c(n = sum(names(tmp) == i)/boot_n, quantile(abs(tmp3), 
                                                     prob = c(0.01, 0.05, 0.1, 0.5, 0.9, 0.95)) * 
             sign(mean(tmp3[tmp3 != 0], na.rm = T)))
       }))
       coef.quantiles <- coef.quantiles[!apply(coef.quantiles, 
                                               1, function(i) all(i[-1] == 0)), ]
-      if (!quiet) 
-        print(coef.quantiles, digits = 3)
+
     }
     return(list(coeffs = coeffs, coeffs.boot = out.coe, coef.quantiles = coef.quantiles, 
                 lars.obj = lars.obj, cv.lars.obj = cv.lars.obj, min_choice = min_choice, 
@@ -593,7 +578,7 @@ load.egrin.data <-
   }
 join_predictors <-
   function (predictor.mat, predictors = rownames(predictor.mat), 
-            funcs = "min", r.filter = 0.7, ...) 
+            funcs = "min", filter_by_r = 0.7, ...) 
   {
     if (is.null(funcs) || is.na(funcs)) 
       return(predictor.mat)
@@ -613,7 +598,7 @@ join_predictors <-
     cat("Combined", funcs, "predictor matrix is", nrow(result), 
         "x", ncol(result), "\n")
     out <- result
-    if (!is.na(r.filter) && r.filter > 0 && r.filter < 1) {
+    if (!is.na(filter_by_r) && filter_by_r > 0 && filter_by_r < 1) {
       apply.func <- get.apply.func()
       all.cors <- cor(t(predictor.mat), t(result), use = "pairwise")
       tmp <- apply.func(1:nrow(result), function(i) {
@@ -622,16 +607,16 @@ join_predictors <-
         tmp.out <- NULL
         ttmp <- all.cors[nm[1:2], i]
         ttmp[is.na(ttmp)] <- 0
-        if (!any(ttmp > r.filter)) 
+        if (!any(ttmp > filter_by_r)) 
           tmp.out <- rownames(result)[i]
         tmp.out
       })
       tmp <- do.call("c", tmp)
       out <- result[tmp, ]
-      cat("Filtered for cor <=", r.filter, ", combined predictor matrix is now ", 
+      cat("Filtered for cor <=", filter_by_r, ", combined predictor matrix is now ", 
           nrow(out), "x", ncol(out), "\n")
     }
-    attr(out, "r.filter") <- r.filter
+    attr(out, "filter_by_r") <- filter_by_r
     return(out)
   }
 mean.variance.normalize <-
@@ -706,50 +691,9 @@ plot.cluster.coeffs <-
         }
       }
     }
-    gr <- graph.edgelist(as.matrix(network[, 1:2]), directed = T)
-    gr.layout <- layout.fruchterman.reingold.grid(gr, niter = 3000 * 
-                                                    length(coefs)^2, coolexp = 0.5, ...)
-    gr.layout <- layout.norm(gr.layout, -1, 1, -1, 1)
-    node.names <- get.vertex.attribute(gr, "name")
-    node.sizes <- rep(15, length(node.names))
-    names(node.sizes) <- node.names
-    node.sizes[grepl("^bic", node.names)] <- 25
-    node.sizes[grepl("^AND", node.names)] <- 10
-    node.sizes <- node.sizes * scale/length(coefs)
-    node.colors <- rep("lightgreen", length(node.names))
-    names(node.colors) <- node.names
-    node.colors[grepl("^bic", node.names)] <- "lightblue"
-    node.colors[grepl("^AND", node.names)] <- "gray"
-    node.frame.colors <- rep("black", length(node.names))
-    names(node.frame.colors) <- node.names
-    if (exists("predictor.mats")) 
-      node.frame.colors[!node.names %in% names(predictor.mats$group_count)] <- "red"
-    node.frame.colors[grepl("^bic", node.names)] <- "blue"
-    node.frame.colors[grepl("^AND", node.names)] <- "gray"
-    node.shapes <- rep("circle", length(node.names))
-    names(node.shapes) <- node.names
-    node.shapes[grepl("^bic", node.names)] <- "square"
-    node.names[grepl("^AND", node.names)] <- ""
-    node.names <- gsub("TFGROUP", "tf", node.names)
-    edge.colors <- ifelse(is.na(network$weight), "white", ifelse(network$weight > 
-                                                                   0, "red", ifelse(network$weight < 0, "green", "blue")))
-    edge.colors[as.character(network$mode) == "*"] <- "black"
-    edge.widths <- abs(network$weight) * 6 + 0.25
-    edge.widths[is.na(edge.widths)] <- 0.25
-    edge.widths[as.character(network$mode) == "*"] <- 0.25
-    tmp <- as.character(network$mode)
-    tmp[tmp == "*"] <- "-"
-    network.mode <- as.factor(tmp)
-    plot(gr, layout = gr.layout, axes = F, margin = 0, rescale = F, 
-         vertex.label = node.names, vertex.size = node.sizes, 
-         vertex.color = node.colors, vertex.shape = node.shapes, 
-         edge.arrow.size = 0.5, vertex.frame.color = node.frame.colors, 
-         vertex.label.cex = cex, edge.color = edge.colors, edge.width = edge.widths, 
-         edge.arrow.mode = as.character(network$mode))
-    invisible(cbind(network, edge.colors, edge.widths))
   }
 plot_objects <-
-  function (coeffs, do.scattersmooth = T, ...) 
+  function (coeffs, ...) 
   {
     layout(matrix(c(1, 1, 1, 2, 2, 2, 4, 4, 1, 1, 1, 2, 2, 2, 
                     4, 4, 3, 3, 3, 3, 5, 5, 5, 5, 3, 3, 3, 3, 5, 5, 5, 5, 
@@ -764,10 +708,10 @@ plot_objects <-
       detach(cv.lars.object)
       invisible()
     }
-    if (!is.null(coeffs$n.boot)) 
-      n.boot <- 1
-    else if (!is.null(coeffs[[1]]$n.boot)) {
-      n.boot <- coeffs[[1]]$n.boot
+    if (!is.null(coeffs$boot_n)) 
+      boot_n <- 1
+    else if (!is.null(coeffs[[1]]$boot_n)) {
+      boot_n <- coeffs[[1]]$boot_n
       coeb <- coeffs
       coeffs <- coeffs[[1]]
     }
@@ -816,7 +760,7 @@ plot_objects <-
                        2, quantile, prob = c(0.1, 0.9), na.rm = T)), col = rep("gray", 
                                                                                2), lty = 1, lwd = 3)
     }
-    if (n.boot > 1) {
+    if (boot_n > 1) {
       coeb <- coeb[sapply(coeb, length) > 0]
       pred.term <- t(sapply(coeb, "[[", "pred.term"))
       tmp <- t(apply(pred.term, 2, quantile, prob = c(0.05, 0.5, 
@@ -835,11 +779,6 @@ plot_objects <-
     out.net <- try(plot.cluster.coeffs(list(coeffs)))
     if (class(out.net) == "try-error") 
       plot(1:10)
-    if (do.scattersmooth && !is.null(coeffs$pred.term)) {
-      smoothScatter(coeffs$observed[coeffs$cluster.conds][!is.na(coeffs$pred.term[1, 
-                                                                                coeffs$cluster.conds])], coeffs$pred.term[1, coeffs$cluster.conds][!is.na(coeffs$pred.term[1, 
-                                                                                                                                                                       coeffs$cluster.conds])])
-    }
     invisible(out.net)
   }
 plot.coeff.stats <-
@@ -966,7 +905,7 @@ predictelate <-
 
 run_inferelator <-
   function (ks, data, col.map, predictors, clusterStack, tau = 10, 
-            plot = T, coeffs = NULL, group_count = Inf, n.boot = 1, 
+            plot = T, coeffs = NULL, group_count = Inf, boot_n = 1, 
             boot.opt = c("resample.lars", "resample.rows", "resample", "lars")[1], ...) 
   {
     in.args <- c(mget(names(formals()), env = as.environment(-1)), 
@@ -982,15 +921,14 @@ run_inferelator <-
       k <- cluster$k
       apply.func <- get.apply.func()
       apply.func <- lapply
-      out.k <- apply.func(1:n.boot, function(boot) {
-        cat("BICLUSTER:", k, boot, "\n")
+      out.k <- apply.func(1:boot_n, function(boot) {
         clust <- cluster
         if (length(clust$cols) <= 2) 
           return(NULL)
         coeffs <- inferelate.one.cluster(clust, predictors, 
                                          data, predictor.mats = predictor.mats, tau = tau, 
-                                         col.map = col.map, n.boot = 1, boot.opt = "resample", 
-                                         quiet = n.boot > 1, ...)
+                                         col.map = col.map, boot_n = 1, boot.opt = "resample", 
+                                         quiet = boot_n > 1, ...)
         clust.rows <- clust$rows[clust$rows %in% rownames(data)]
         clust.conds <- sort(coeffs$cluster.conds)
         clust.conds <- clust.conds[clust.conds %in% colnames(data)]
@@ -1031,19 +969,19 @@ run_inferelator <-
         coeffs$plot.info$clust.conds.plot <- c(clust.conds, 
                                                sort(colnames(data)[!colnames(data) %in% clust.conds]))
         coeffs$plot.info$n.conds <- length(clust.conds)
-        cat(k, tau, rmsd.ss, rmsd.term, rmsd.term.out, "\n")
+        #cat(k, tau, rmsd.ss, rmsd.term, rmsd.term.out, "\n")
         coeffs$pred.ss <- pred.ss
         coeffs$pred.term <- pred.term
         coeffs$rmsd <- c(ss = rmsd.ss, term = rmsd.term, term.out = rmsd.term.out)
         coeffs$observed <- observed
-        coeffs$n.boot <- n.boot
+        coeffs$boot_n <- boot_n
         coeffs$boot.opt <- boot.opt
         attr(coeffs, "class") <- "coeff.obj"
         if (boot > 1) 
           coeffs$plot.info <- NULL
         coeffs
       })
-      names(out.k) <- paste(k, 1:n.boot, sep = ".")
+      names(out.k) <- paste(k, 1:boot_n, sep = ".")
       try(plot_objects(out.k, ...))
       
       attr(out.k, "class") <- "coeff.obj"
@@ -1056,20 +994,3 @@ run_inferelator <-
   }
 
 
-start_inferalator <- function (e, ...)
-{
-  ratios <- e$get.cluster.matrix()
-  ks <- 1:e$k.clust
-  data <- ratios
-  
-  if (!is.null(envMap)) {
-    data <- rbind(ratios, t(as.matrix(envMap)))
-    predictors <- c(predictors, colnames(envMap))
-  }
-  
-  if (!is.null(predictors)) 
-    predictors <- predictors[predictors %in% rownames(data)]
-  
-  out <- run_inferelator(ks, data, colMap, predictors, clusterStack = e$clusterStack, gene.prefix = e$genome.info$gene.prefix, ...)
-  invisible(out)
-}
