@@ -19,3 +19,6 @@ Please follow the given steps in RStudio to run the project
 8. source('<path/to/project_inferelator.R>')
 
 9. coefficients <- start_inferalator( e, min_choice="min+4se", group_count=999, alpha=0.8, boot_n=1, tau=10,r_threshold=Inf, weighted=T, aic.filter=Inf, plot=T )
+
+
+Please Note: The dataset used in this project and part of the algorithm is acquired from : https://github.com/baliga-lab/cMonkeyNwInf
